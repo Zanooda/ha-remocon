@@ -18,10 +18,12 @@ Control and monitor your Elco heating system (heat pump e.g. Aerotop SPK, or gas
 
 **Gas boilers** (virtual-zone boilers, e.g. residential gas boilers)
 - **Climate entity** — Set the room setpoint; switch operation mode (Off / Heat / Auto)
-- **Select entities** — Operation mode (Summer / Winter / Heating only / Off) and zone mode (Manual / Time program)
-- **Number entities** — Central-heating flow setpoint, flow offset, reduced temperature
-- **Sensors** — Outside temperature, desired/reduced temperature, flow setpoint, gas and electricity consumption (current month)
-- **Binary sensors** — Burner flame, heat request, heating active
+- **Select entities** — Operation mode (Summer / Winter / Heating only / Off), zone mode (Manual / Time program) and hot water mode (Disabled / Time based / Always active)
+- **Number entities** — Central-heating flow setpoint, flow offset, reduced temperature, hot water setpoint
+- **Sensors** — Outside temperature, desired/reduced temperature, flow setpoint, hot water temperature, gas and electricity consumption (current month)
+- **Binary sensors** — Burner flame, heat request, hot water active
+
+Hot water entities are only created when the boiler exposes a DHW circuit.
 
 **Common**
 - **Config flow** — Easy setup directly in the Home Assistant UI
@@ -101,18 +103,22 @@ system — heat pumps expose the heat-pump entities, gas boilers the boiler ones
 | `climate.remocon_net_boiler` | Climate | Room setpoint and coarse mode (Off / Heat / Auto) |
 | `select.operation_mode` | Select | Operation mode (Summer / Winter / Heating only / Off) |
 | `select.zone_mode` | Select | Zone mode (Manual / Time program) |
+| `select.dhw_mode` | Select | Hot water mode (Disabled / Time based / Always active) — only with a DHW circuit |
 | `number.flow_setpoint` | Number | Central-heating flow setpoint temperature |
 | `number.flow_offset` | Number | Central-heating flow temperature offset |
 | `number.reduced_temperature` | Number | Reduced (night) setpoint temperature |
+| `number.dhw_temperature` | Number | Hot water setpoint — only with a DHW circuit |
 | `sensor.outside_temperature` | Sensor | Outside temperature |
 | `sensor.desired_temperature` | Sensor | Desired room temperature |
 | `sensor.reduced_temperature` | Sensor | Reduced setpoint temperature |
 | `sensor.ch_flow_setpoint` | Sensor | Flow setpoint temperature |
+| `sensor.dhw_temperature` | Sensor | Measured hot water temperature — only with a DHW circuit |
 | `sensor.gas_heating_month` | Sensor | Gas used for heating this month (kWh) |
 | `sensor.gas_dhw_month` | Sensor | Gas used for hot water this month (kWh) |
 | `sensor.boiler_electricity_month` | Sensor | Electricity used this month (kWh) |
 | `binary_sensor.flame_on` | Binary | Burner flame is lit |
 | `binary_sensor.heat_request` | Binary | Zone is requesting heat |
+| `binary_sensor.dhw_enabled` | Binary | Hot water is active — only with a DHW circuit |
 
 ### Climate entity
 
@@ -170,6 +176,10 @@ python3 remocon.py --config-file config.json set-zone-mode manual
 # Central-heating flow setpoint and offset
 python3 remocon.py --config-file config.json set-flow-setpoint 60
 python3 remocon.py --config-file config.json set-flow-offset 5
+
+# Hot water (boilers with a DHW circuit)
+python3 remocon.py --config-file config.json set-dhw-temp --comfort 60
+python3 remocon.py --config-file config.json set-dhw-mode always-active   # disabled|time-based|always-active
 ```
 
 ### MQTT
@@ -183,7 +193,7 @@ for gas boilers) to the configured broker.
 - **Cloud-dependent:** Control goes through the Remocon-Net cloud. No control possible during internet outages.
 - **Polling:** Data is fetched every 2 minutes (no real-time streaming).
 - **No room sensor:** If no room thermostat is connected, `current_temperature` shows the target value (heat pumps) or is unknown (boilers, which report no measured room temperature).
-- **DHW control:** Domestic hot water entities are read-only and only created for systems that expose a DHW circuit (many gas boilers are heating-only).
+- **DHW:** Hot water setpoint and mode are controllable where the system exposes a DHW circuit (heat pumps via the BSB API, boilers via data items). Systems without a DHW circuit get no hot water entities.
 - **Gas boilers:** Only virtual-zone boilers exposing the v2 data-item model are supported. Heating/cooling curves, holiday programmes and weekly time programmes are not yet exposed.
 
 ## Technical details
@@ -192,7 +202,7 @@ The integration uses the same API as the Elco Remocon-Net web app:
 
 - **Login:** Cookie-based authentication via `/R2/Account/Login`
 - **Data:** R2 Web API (`/R2/PlantHome/GetData/`) + v2 REST API (`/api/v2/remote/dataItems/`)
-- **Features:** `/R2/Plant/Features/{gateway}` — the real feature set is sent back with every read/write request; it selects which data items the plant reports
+- **Features:** `/R2/Plant/Features/{gateway}` — the real feature set is sent with every read/write request; it selects which data items the plant reports. The API resolves flags this endpoint leaves null (e.g. the DHW flags) and returns them with each `GetData` response; the integration adopts those and refetches once so e.g. DHW entities appear on the first poll.
 - **Control (heat pumps):** v2 REST API (`/api/v2/remote/bsbZones/`, `/api/v2/remote/bsbPlantData/`)
 - **Control (gas boilers):** v2 BSB data items via `/R2/PlantAdvancedSettings/Save/{gateway}`
 - **Consumption:** `/R2/PlantMetering/GetData/{gateway}` (gas / electricity, current month)

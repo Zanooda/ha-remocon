@@ -13,6 +13,12 @@ from .const import (
     ITEM_AUTOMATIC_THERMOREGULATION,
     ITEM_CH_FLOW_SETPOINT,
     ITEM_CH_FLOW_TEMP,
+    ITEM_DHW_MODE,
+    ITEM_DHW_STORAGE_TEMP,
+    ITEM_DHW_TEMP,
+    ITEM_DHW_TIMEPROG_COMFORT_TEMP,
+    ITEM_DHW_TIMEPROG_ECONOMY_TEMP,
+    DHW_ITEM_DISABLED,
     ITEM_HEATING_CIRCUIT_PRESSURE,
     ITEM_HEATING_FLOW_TEMP,
     ITEM_HOLIDAY,
@@ -96,8 +102,10 @@ class RemoconData:
     dhw_temp: float = 0.0
     dhw_comfort_temp: float = 0.0
     dhw_reduced_temp: float = 0.0
+    dhw_temp_setpoint: Optional[float] = None
     dhw_mode: int = 0
     dhw_enabled: bool = False
+    has_dhw: bool = False
     heat_pump_on: bool = False
     flame_sensor: bool = False
     # System (from v2 API)
@@ -140,6 +148,8 @@ class RemoconClient:
         self._zone = zone
         self._session: Optional[requests.Session] = None
         self._features: Optional[dict[str, Any]] = None
+        self._features_dirty = False
+        self._features_resolved = False
         self._system_type: Optional[int] = None
         self._is_gas_boiler: Optional[bool] = None
         self._comfort_item_id: str = ITEM_VIRT_COMFORT_TEMP
@@ -224,10 +234,34 @@ class RemoconClient:
                 features["gatewayId"] = plant["gatewayId"]
             self._system_type = plant.get("systemType")
             self._features = features or dict(FEATURES_PAYLOAD)
+            self._features_resolved = bool(features)
         except RemoconApiError as err:
             _LOGGER.debug("Could not fetch plant features, using defaults: %s", err)
             self._features = dict(FEATURES_PAYLOAD)
+            self._features_resolved = False
         return self._features
+
+    def _merge_features(self, features: Any) -> bool:
+        """Merge non-null feature flags from an API response into the cache.
+
+        The API resolves flags the /Features endpoint leaves null (e.g. the DHW
+        flags) and returns the resolved set with every GetData response. Those
+        flags select the reported data items, so we must adopt them (and refetch
+        once) to see e.g. the DHW items.
+        """
+        if not isinstance(features, dict):
+            return False
+        if self._features is None:
+            self._features = dict(features)
+            return True
+        changed = False
+        for key, value in features.items():
+            if value is None:
+                continue
+            if self._features.get(key) != value:
+                self._features[key] = value
+                changed = True
+        return changed
 
     def _get_raw(self, *, not_essentials: bool = False, real_features: bool = False) -> dict:
         path = f"/R2/PlantHome/GetData/{self._gateway_id}?umsys=si"
@@ -248,7 +282,10 @@ class RemoconClient:
         if isinstance(data, dict) and not data.get("ok", True):
             _LOGGER.error("API returned error: %s", data)
             raise RemoconDataError(data.get("message", "API returned error"))
-        return data.get("data", data) if isinstance(data, dict) else data
+        result = data.get("data", data) if isinstance(data, dict) else data
+        if isinstance(result, dict) and self._merge_features(result.get("features")):
+            self._features_dirty = True
+        return result
 
     def _get_system_items(self, item_ids: list[dict]) -> dict[str, Any]:
         path = f"/api/v2/remote/dataItems/{self._gateway_id}/get?umsys=si"
@@ -264,29 +301,40 @@ class RemoconClient:
     def get_data(self) -> RemoconData:
         """Fetch all data and return a RemoconData object."""
         if self._is_gas_boiler is None:
-            probe = self._get_raw()
-            if "plantData" in probe or "zoneData" in probe:
-                self._is_gas_boiler = False
-                return self._parse_heat_pump(probe)
-            self._is_gas_boiler = bool(probe.get("items"))
+            features = self._get_features()
+            if self._features_resolved:
+                # The /Features endpoint resolves whether this is a boiler.
+                self._is_gas_boiler = bool(features.get("hasBoiler")) and not bool(
+                    features.get("hpSys")
+                )
+            else:
+                probe = self._get_raw()
+                if "plantData" in probe or "zoneData" in probe:
+                    self._is_gas_boiler = False
+                    return self._parse_heat_pump(probe)
+                self._is_gas_boiler = bool(probe.get("items"))
 
-        if self._is_gas_boiler:
-            # Boilers report a flat item list and need the real feature set to
-            # get the correct items (incl. flame / heat request).
+        if not self._is_gas_boiler:
+            return self._parse_heat_pump(self._get_raw())
+
+        # Boilers report a flat item list and need the real feature set. The
+        # first response resolves feature flags the /Features endpoint leaves
+        # null (e.g. DHW) and which gate additional items, so refetch once with
+        # the resolved set to get a complete item list on the first poll.
+        self._features_dirty = False
+        raw = self._get_raw(not_essentials=True, real_features=True)
+        if self._features_dirty:
+            self._features_dirty = False
             raw = self._get_raw(not_essentials=True, real_features=True)
-        else:
-            raw = self._get_raw()
         if not isinstance(raw, dict):
             raise RemoconDataError(f"Unexpected data format from API: {type(raw)}")
 
-        if self._is_gas_boiler:
-            data = self._parse_gas_boiler(raw)
-            try:
-                self._apply_metering(data)
-            except RemoconApiError as err:
-                _LOGGER.debug("Could not fetch metering data: %s", err)
-            return data
-        return self._parse_heat_pump(raw)
+        data = self._parse_gas_boiler(raw)
+        try:
+            self._apply_metering(data)
+        except RemoconApiError as err:
+            _LOGGER.debug("Could not fetch metering data: %s", err)
+        return data
 
     def _parse_heat_pump(self, raw: dict) -> RemoconData:
         """Parse a heat-pump (plantData/zoneData) response."""
@@ -332,6 +380,7 @@ class RemoconClient:
             dhw_reduced_temp=float(dhw_reduced.get("value", 0)),
             dhw_mode=dhw_mode_info.get("value", 0),
             dhw_enabled=bool(plant.get("dhwEnabled", 0)),
+            has_dhw=bool(plant.get("dhwEnabled", 0)),
             heat_pump_on=bool(plant.get("heatPumpOn", 0)),
             flame_sensor=bool(plant.get("flameSensor", 0)),
             system_pressure=float(pressure) if pressure is not None else None,
@@ -406,6 +455,27 @@ class RemoconClient:
         pressure = value(ITEM_HEATING_CIRCUIT_PRESSURE)
         if pressure is not None:
             data.system_pressure = float(pressure)
+
+        # Domestic hot water (only present when the plant exposes a DHW circuit)
+        dhw_mode = value(ITEM_DHW_MODE)
+        if dhw_mode is not None:
+            data.has_dhw = True
+            data.dhw_mode = int(dhw_mode)
+            data.dhw_enabled = int(dhw_mode) != DHW_ITEM_DISABLED
+        dhw_storage = value(ITEM_DHW_STORAGE_TEMP)
+        if dhw_storage is not None:
+            data.dhw_temp = float(dhw_storage)
+        dhw_setpoint = value(ITEM_DHW_TEMP)
+        if dhw_setpoint is not None:
+            data.dhw_temp_setpoint = float(dhw_setpoint)
+        dhw_comfort = value(ITEM_DHW_TIMEPROG_COMFORT_TEMP)
+        if dhw_comfort is not None:
+            data.dhw_comfort_temp = float(dhw_comfort)
+        dhw_reduced = value(ITEM_DHW_TIMEPROG_ECONOMY_TEMP)
+        if dhw_reduced is not None:
+            data.dhw_reduced_temp = float(dhw_reduced)
+        if any(i in data.items for i in (ITEM_DHW_TEMP, ITEM_DHW_STORAGE_TEMP)):
+            data.has_dhw = True
 
         return data
 
@@ -509,7 +579,13 @@ class RemoconClient:
         ``changes`` maps a data item id to its new value. The API requires the
         current item objects to be echoed back alongside the requested values.
         """
+        # Ensure the resolved feature set (e.g. DHW flags) is used so the item
+        # set and the echoed features are complete.
+        self._features_dirty = False
         raw = self._get_raw(not_essentials=True, real_features=True)
+        if self._features_dirty:
+            self._features_dirty = False
+            raw = self._get_raw(not_essentials=True, real_features=True)
         items = {item["id"]: item for item in raw.get("items") or []}
         request: list[dict[str, Any]] = []
         previous: list[dict[str, Any]] = []
@@ -554,6 +630,14 @@ class RemoconClient:
     def set_flow_offset(self, value: float) -> None:
         """Set the central-heating flow temperature offset."""
         self.set_data_items({ITEM_VIRT_FLOW_OFFSET: value})
+
+    def set_dhw_setpoint(self, temperature: float) -> None:
+        """Set the domestic hot water setpoint (gas boilers)."""
+        self.set_data_items({ITEM_DHW_TEMP: temperature})
+
+    def set_boiler_dhw_mode(self, mode: int) -> None:
+        """Set the domestic hot water mode (0 disabled/1 time based/2 always)."""
+        self.set_data_items({ITEM_DHW_MODE: mode})
 
     def reauth(self) -> None:
         """Force re-authentication."""

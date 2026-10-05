@@ -12,6 +12,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     BOILER_TO_ZONE_MODE,
+    DHW_ITEM_TO_MODE,
+    DHW_MODE_TO_ITEM,
     DOMAIN,
     OPERATION_MODE_TO_PLANT,
     PLANT_TO_OPERATION_MODE,
@@ -32,12 +34,13 @@ async def async_setup_entry(
     if not (coordinator.data and coordinator.data.is_gas_boiler):
         return
     gw_id = entry.data["gateway_id"]
-    async_add_entities(
-        [
-            ElcoOperationModeSelect(coordinator, gw_id),
-            ElcoZoneModeSelect(coordinator, gw_id),
-        ]
-    )
+    entities: list[SelectEntity] = [
+        ElcoOperationModeSelect(coordinator, gw_id),
+        ElcoZoneModeSelect(coordinator, gw_id),
+    ]
+    if coordinator.data.has_dhw:
+        entities.append(ElcoDhwModeSelect(coordinator, gw_id))
+    async_add_entities(entities)
 
 
 class _ElcoBoilerSelect(CoordinatorEntity[ElcoRemoconCoordinator], SelectEntity):
@@ -110,5 +113,31 @@ class ElcoZoneModeSelect(_ElcoBoilerSelect):
             return
         await self.hass.async_add_executor_job(
             self.coordinator.client.set_boiler_zone_mode, zone_mode
+        )
+        await self.coordinator.async_request_refresh()
+
+
+class ElcoDhwModeSelect(_ElcoBoilerSelect):
+    """Domestic hot water mode (disabled / time based / always active)."""
+
+    _attr_translation_key = "dhw_mode"
+    _attr_options = list(DHW_MODE_TO_ITEM)
+
+    def __init__(self, coordinator: ElcoRemoconCoordinator, gw_id: str) -> None:
+        super().__init__(coordinator, gw_id)
+        self._attr_unique_id = f"{gw_id}_dhw_mode"
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the current DHW mode."""
+        return DHW_ITEM_TO_MODE.get(self.coordinator.data.dhw_mode)
+
+    async def async_select_option(self, option: str) -> None:
+        """Set the DHW mode."""
+        mode = DHW_MODE_TO_ITEM.get(option)
+        if mode is None:
+            return
+        await self.hass.async_add_executor_job(
+            self.coordinator.client.set_boiler_dhw_mode, mode
         )
         await self.coordinator.async_request_refresh()

@@ -100,6 +100,28 @@ ITEM_VIRT_FLOW_OFFSET = "VirtTempOffsetHeat"
 ITEM_ZONE_HEAT_REQUEST = "ZoneHeatRequest"
 ITEM_IS_FLAME_ON = "IsFlameOn"
 ITEM_HOLIDAY = "Holiday"
+ITEM_DHW_MODE = "DhwMode"
+ITEM_DHW_TEMP = "DhwTemp"
+ITEM_DHW_STORAGE_TEMP = "DhwStorageTemperature"
+ITEM_DHW_TIMEPROG_COMFORT_TEMP = "DhwTimeProgComfortTemp"
+ITEM_DHW_TIMEPROG_ECONOMY_TEMP = "DhwTimeProgEconomyTemp"
+
+# DHW operation modes for gas boilers ("DhwMode" data item)
+DHW_BOILER_MODES = {
+    0: "Disabled",
+    1: "Time Based",
+    2: "Always active",
+}
+
+DHW_BOILER_MODE_MAP = {
+    "disabled": 0,
+    "time based": 1,
+    "time-based": 1,
+    "time_based": 1,
+    "always active": 2,
+    "always-active": 2,
+    "always_active": 2,
+}
 
 # Features payload used for v2 API calls — matches what the web UI sends.
 # This may need adjustment depending on your specific heat pump model.
@@ -163,6 +185,7 @@ class HeatingData:
     dhw_temperature: float = 0.0
     dhw_comfort_temp: Optional[float] = None
     dhw_reduced_temp: Optional[float] = None
+    dhw_setpoint: Optional[float] = None
     dhw_mode: str = "Unknown"
     dhw_enabled: bool = False
     boiler_status: str = "Unknown"
@@ -200,6 +223,7 @@ class HeatingData:
             "heating_active": self.heating_active,
             "cooling_active": self.cooling_active,
             "dhw_temperature": self.dhw_temperature,
+            "dhw_setpoint": self.dhw_setpoint,
             "dhw_mode": self.dhw_mode,
             "dhw_enabled": self.dhw_enabled,
             "heat_pump_on": self.heat_pump_on,
@@ -317,6 +341,8 @@ class RemoconClient:
         self.config = config
         self.session: Optional[requests.Session] = None
         self._features: Optional[dict] = None
+        self._features_dirty = False
+        self._features_resolved = False
         self._comfort_item_id: str = ITEM_VIRT_COMFORT_TEMP
         self._reduced_item_id: str = ITEM_VIRT_REDUCED_TEMP
         self._is_gas_boiler: Optional[bool] = None
@@ -388,9 +414,33 @@ class RemoconClient:
             if plant.get("gatewayId"):
                 features["gatewayId"] = plant["gatewayId"]
             self._features = features or dict(FEATURES_PAYLOAD)
+            self._features_resolved = bool(features)
         except RemoconError:
             self._features = dict(FEATURES_PAYLOAD)
+            self._features_resolved = False
         return self._features
+
+    def _merge_features(self, features: Any) -> bool:
+        """Merge non-null feature flags from an API response into the cache.
+
+        The API resolves flags the /Features endpoint leaves null (e.g. the DHW
+        flags) and returns the resolved set with each GetData response. Those
+        flags select the reported data items, so we adopt them and refetch once
+        to see e.g. the DHW items.
+        """
+        if not isinstance(features, dict):
+            return False
+        if self._features is None:
+            self._features = dict(features)
+            return True
+        changed = False
+        for key, value in features.items():
+            if value is None:
+                continue
+            if self._features.get(key) != value:
+                self._features[key] = value
+                changed = True
+        return changed
 
     def get_home_data(self, not_essentials: bool = False, real_features: bool = False) -> dict:
         """Fetch home data via the R2 API (plantData/zoneData or items[])."""
@@ -407,7 +457,10 @@ class RemoconClient:
             "features": self._get_features() if real_features else FEATURES_PAYLOAD,
         }
         data = self._request("POST", path, json=payload)
-        return data.get("data", data)
+        result = data.get("data", data)
+        if isinstance(result, dict) and self._merge_features(result.get("features")):
+            self._features_dirty = True
+        return result
 
     def get_plant_data(self) -> dict:
         """Fetch plant + zone data via the legacy BSB API (heat pumps)."""
@@ -458,11 +511,17 @@ class RemoconClient:
     def is_gas_boiler(self) -> bool:
         """Detect whether the plant is a gas boiler (item-based) or a heat pump."""
         if self._is_gas_boiler is None:
-            probe = self.get_home_data()
-            if "plantData" in probe or "zoneData" in probe:
-                self._is_gas_boiler = False
+            features = self._get_features()
+            if self._features_resolved:
+                self._is_gas_boiler = bool(features.get("hasBoiler")) and not bool(
+                    features.get("hpSys")
+                )
             else:
-                self._is_gas_boiler = bool(probe.get("items"))
+                probe = self.get_home_data()
+                if "plantData" in probe or "zoneData" in probe:
+                    self._is_gas_boiler = False
+                else:
+                    self._is_gas_boiler = bool(probe.get("items"))
         return self._is_gas_boiler
 
     def get_full_data(self) -> HeatingData:
@@ -470,7 +529,13 @@ class RemoconClient:
         if not self.is_gas_boiler():
             return self._parse_heat_pump(self.get_home_data())
 
+        # The first response resolves feature flags that gate further items
+        # (e.g. DHW); refetch once with the resolved set for a complete list.
+        self._features_dirty = False
         raw = self.get_home_data(not_essentials=True, real_features=True)
+        if self._features_dirty:
+            self._features_dirty = False
+            raw = self.get_home_data(not_essentials=True, real_features=True)
         data = self._parse_gas_boiler(raw)
         try:
             metering = self.get_metering()
@@ -562,6 +627,10 @@ class RemoconClient:
             flow_temp = value(ITEM_HEATING_FLOW_TEMP)
         heat_request = value(ITEM_ZONE_HEAT_REQUEST)
 
+        dhw_mode = value(ITEM_DHW_MODE)
+        dhw_storage = value(ITEM_DHW_STORAGE_TEMP)
+        dhw_setpoint = value(ITEM_DHW_TEMP)
+
         return HeatingData(
             current_temperature=float(value(ITEM_ZONE_MEASURED_TEMP) or 0),
             desired_temperature=float(value(ITEM_ZONE_DESIRED_TEMP) or 0),
@@ -573,9 +642,12 @@ class RemoconClient:
             heating_active=bool(heat_request),
             cooling_active=False,
             heat_or_cool_request=bool(heat_request),
-            dhw_temperature=0.0,
-            dhw_mode="Unknown",
-            dhw_enabled=False,
+            dhw_temperature=float(dhw_storage or 0),
+            dhw_comfort_temp=_float_or_none(value(ITEM_DHW_TIMEPROG_COMFORT_TEMP)),
+            dhw_reduced_temp=_float_or_none(value(ITEM_DHW_TIMEPROG_ECONOMY_TEMP)),
+            dhw_setpoint=_float_or_none(dhw_setpoint),
+            dhw_mode=DHW_BOILER_MODES.get(int(dhw_mode), "Unknown") if dhw_mode is not None else "Unknown",
+            dhw_enabled=dhw_mode is not None and int(dhw_mode) != 0,
             boiler_status="Running" if value(ITEM_IS_FLAME_ON) else "Standby",
             heat_pump_on=bool(heat_request),
             system_pressure=_float_or_none(value(ITEM_HEATING_CIRCUIT_PRESSURE)),
@@ -708,7 +780,13 @@ class RemoconClient:
         ``changes`` maps a data item id to its new value. The API requires the
         current item objects to be echoed back alongside the requested values.
         """
+        # Ensure the resolved feature set (e.g. DHW flags) is used so the item
+        # set and the echoed features are complete.
+        self._features_dirty = False
         raw = self.get_home_data(not_essentials=True, real_features=True)
+        if self._features_dirty:
+            self._features_dirty = False
+            raw = self.get_home_data(not_essentials=True, real_features=True)
         items = {item["id"]: item for item in raw.get("items") or []}
         request = []
         previous = []
@@ -774,6 +852,19 @@ class RemoconClient:
         """Set the central-heating flow temperature offset."""
         return self.set_data_items({ITEM_VIRT_FLOW_OFFSET: value})
 
+    def set_boiler_dhw_setpoint(self, value: float) -> bool:
+        """Set the domestic hot water setpoint (gas boilers)."""
+        return self.set_data_items({ITEM_DHW_TEMP: value})
+
+    def set_boiler_dhw_mode(self, mode: str) -> bool:
+        """Set the DHW mode (gas boilers): disabled, time-based or always-active."""
+        new_mode = DHW_BOILER_MODE_MAP.get(mode.lower().replace("_", " ").strip())
+        if new_mode is None:
+            raise DataError(
+                f"Invalid DHW mode '{mode}'. Valid: disabled, time-based, always-active"
+            )
+        return self.set_data_items({ITEM_DHW_MODE: new_mode})
+
 
 def _float_or_none(v) -> Optional[float]:
     if v is None:
@@ -827,6 +918,8 @@ def publish_mqtt(config: Config, data: HeatingData) -> None:
         f"{prefix}/zone_id": data.zone_id,
         f"{prefix}/timestamp": data.timestamp.isoformat(),
     }
+    if data.dhw_setpoint is not None:
+        topics[f"{prefix}/dhw/setpoint"] = f"{data.dhw_setpoint:.1f}"
     if data.system_pressure is not None:
         topics[f"{prefix}/system/pressure"] = f"{data.system_pressure:.1f}"
     if data.flow_temperature is not None:
@@ -913,6 +1006,19 @@ def display_status(data: HeatingData) -> None:
         if data.virt_flow_offset is not None:
             print(f"  Flow Offset:    {data.virt_flow_offset:+.1f}")
         print()
+
+        if data.dhw_mode != "Unknown":
+            print("  Domestic Hot Water")
+            print("  " + "-" * 46)
+            print(f"  Temperature:    {data.dhw_temperature:.1f} °C")
+            if data.dhw_setpoint is not None:
+                print(f"  Set Point:      {data.dhw_setpoint:.1f} °C")
+            if data.dhw_comfort_temp is not None:
+                print(f"  Comfort (prog): {data.dhw_comfort_temp:.1f} °C")
+            if data.dhw_reduced_temp is not None:
+                print(f"  Economy (prog): {data.dhw_reduced_temp:.1f} °C")
+            print(f"  Mode:           {data.dhw_mode}")
+            print()
 
         print("  Consumption (this month)")
         print("  " + "-" * 46)
@@ -1042,14 +1148,31 @@ def cmd_set_dhw_temp(client: RemoconClient, config: Config, args: argparse.Names
         print("Error: specify --comfort and/or --reduced temperature", file=sys.stderr)
         return 1
 
-    client.set_dhw_temperature(comfort=args.comfort, reduced=args.reduced)
-    print(f"DHW temperatures updated (comfort={args.comfort}, reduced={args.reduced})")
+    if client.is_gas_boiler():
+        changes = {}
+        if args.comfort is not None:
+            changes[ITEM_DHW_TEMP] = args.comfort
+        if args.reduced is not None:
+            changes[ITEM_DHW_TIMEPROG_ECONOMY_TEMP] = args.reduced
+        client.set_data_items(changes)
+        print(f"DHW temperatures updated (setpoint={args.comfort}, "
+              f"time-prog economy={args.reduced})")
+    else:
+        client.set_dhw_temperature(comfort=args.comfort, reduced=args.reduced)
+        print(f"DHW temperatures updated (comfort={args.comfort}, reduced={args.reduced})")
     return 0
 
 
 def cmd_set_dhw_mode(client: RemoconClient, config: Config, args: argparse.Namespace) -> int:
-    """Set DHW mode (on/off)."""
-    client.set_dhw_mode(args.mode)
+    """Set the DHW mode.
+
+    Gas boilers: disabled/time-based/always-active.
+    Heat pumps: on/off.
+    """
+    if client.is_gas_boiler():
+        client.set_boiler_dhw_mode(args.mode)
+    else:
+        client.set_dhw_mode(args.mode)
     print(f"DHW mode set to: {args.mode}")
     return 0
 
@@ -1124,13 +1247,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     # set-dhw-temp
     p_dhw_temp = sub.add_parser("set-dhw-temp", help="Set DHW temperatures")
-    p_dhw_temp.add_argument("--comfort", type=float, help="DHW comfort temperature (°C)")
-    p_dhw_temp.add_argument("--reduced", type=float, help="DHW reduced temperature (°C)")
+    p_dhw_temp.add_argument("--comfort", type=float,
+                            help="DHW setpoint (°C); heat pumps: comfort temperature")
+    p_dhw_temp.add_argument("--reduced", type=float,
+                            help="Heat pumps: reduced temperature; boilers: time-program economy temperature")
     _add_config_args(p_dhw_temp)
 
     # set-dhw-mode
-    p_dhw_mode = sub.add_parser("set-dhw-mode", help="Set DHW mode (on/off)")
-    p_dhw_mode.add_argument("mode", choices=["on", "off"], help="DHW mode")
+    # Gas boilers: disabled/time-based/always-active. Heat pumps: on/off.
+    p_dhw_mode = sub.add_parser("set-dhw-mode", help="Set DHW mode")
+    p_dhw_mode.add_argument("mode",
+                            choices=["on", "off", "disabled", "time-based", "always-active"],
+                            help="DHW mode (boiler: disabled/time-based/always-active; "
+                                 "heat pump: on/off)")
     _add_config_args(p_dhw_mode)
 
     # raw-get

@@ -88,6 +88,9 @@
       },
       "reduced_temperature": {
         "name": "Absenktemperatur"
+      },
+      "dhw_temperature": {
+        "name": "Warmwasser-Solltemperatur"
       }
     },
     "select": {
@@ -105,6 +108,14 @@
         "state": {
           "manual": "Manuell",
           "time_program": "Zeitprogramm"
+        }
+      },
+      "dhw_mode": {
+        "name": "Warmwasser-Betriebsart",
+        "state": {
+          "disabled": "Deaktiviert",
+          "time_based": "Zeitprogramm",
+          "always_active": "Immer aktiv"
         }
       }
     }

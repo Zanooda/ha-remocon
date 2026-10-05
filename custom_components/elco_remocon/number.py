@@ -19,6 +19,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
+    ITEM_DHW_TEMP,
     ITEM_VIRT_FLOW_OFFSET,
     ITEM_VIRT_FLOW_SETPOINT,
     ITEM_VIRT_REDUCED_TEMP,
@@ -63,6 +64,15 @@ NUMBERS: tuple[ElcoNumberDescription, ...] = (
         translation_key="reduced_temperature",
         item_ids=(ITEM_VIRT_REDUCED_TEMP, ITEM_ZONE_ECONOMY_TEMP),
         setter="set_boiler_reduced_temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=NumberDeviceClass.TEMPERATURE,
+        mode=NumberMode.BOX,
+    ),
+    ElcoNumberDescription(
+        key="dhw_temperature",
+        translation_key="dhw_temperature",
+        item_ids=(ITEM_DHW_TEMP,),
+        setter="set_dhw_setpoint",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=NumberDeviceClass.TEMPERATURE,
         mode=NumberMode.BOX,

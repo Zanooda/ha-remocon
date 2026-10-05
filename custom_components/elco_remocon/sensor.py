@@ -90,7 +90,7 @@ SENSORS: tuple[ElcoSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         value_fn=lambda d: d.dhw_temp if d.dhw_temp > 0 else None,
-        exists_fn=lambda d: d.dhw_enabled,
+        exists_fn=lambda d: d.has_dhw if d.is_gas_boiler else d.dhw_enabled,
     ),
     ElcoSensorDescription(
         key="ch_flow_setpoint",

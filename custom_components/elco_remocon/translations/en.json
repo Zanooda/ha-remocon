@@ -88,6 +88,9 @@
       },
       "reduced_temperature": {
         "name": "Reduced Temperature"
+      },
+      "dhw_temperature": {
+        "name": "Hot Water Temperature"
       }
     },
     "select": {
@@ -105,6 +108,14 @@
         "state": {
           "manual": "Manual",
           "time_program": "Time program"
+        }
+      },
+      "dhw_mode": {
+        "name": "Hot Water Mode",
+        "state": {
+          "disabled": "Disabled",
+          "time_based": "Time based",
+          "always_active": "Always active"
         }
       }
     }
