@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Remocon-Net (unofficial)",
-        "description": "Unofficial integration — connect your Elco heat pump via the Remocon-Net Cloud.",
+        "description": "Unofficial integration — connect your Elco heating system via the Remocon-Net Cloud.",
         "data": {
           "email": "Email",
           "password": "Password",
@@ -19,6 +19,14 @@
     }
   },
   "entity": {
+    "climate": {
+      "elco_heat_pump": {
+        "name": "Heat Pump"
+      },
+      "elco_boiler": {
+        "name": "Boiler"
+      }
+    },
     "sensor": {
       "outside_temperature": {
         "name": "Outside Temperature"
@@ -37,6 +45,67 @@
       },
       "dhw_temperature": {
         "name": "DHW Temperature"
+      },
+      "ch_flow_setpoint": {
+        "name": "Flow Setpoint Temperature"
+      },
+      "gas_heating_month": {
+        "name": "Gas Consumption Heating (this month)"
+      },
+      "gas_dhw_month": {
+        "name": "Gas Consumption Hot Water (this month)"
+      },
+      "boiler_electricity_month": {
+        "name": "Electricity Consumption (this month)"
+      }
+    },
+    "binary_sensor": {
+      "heating_active": {
+        "name": "Heating Active"
+      },
+      "cooling_active": {
+        "name": "Cooling Active"
+      },
+      "heat_pump_on": {
+        "name": "Heat Pump Running"
+      },
+      "dhw_enabled": {
+        "name": "Domestic Hot Water"
+      },
+      "flame_on": {
+        "name": "Burner Flame"
+      },
+      "heat_request": {
+        "name": "Heat Request"
+      }
+    },
+    "number": {
+      "flow_setpoint": {
+        "name": "Flow Setpoint Temperature"
+      },
+      "flow_offset": {
+        "name": "Flow Temperature Offset"
+      },
+      "reduced_temperature": {
+        "name": "Reduced Temperature"
+      }
+    },
+    "select": {
+      "operation_mode": {
+        "name": "Operation Mode",
+        "state": {
+          "summer": "Summer",
+          "winter": "Winter",
+          "heating_only": "Heating only",
+          "off": "Off"
+        }
+      },
+      "zone_mode": {
+        "name": "Zone Mode",
+        "state": {
+          "manual": "Manual",
+          "time_program": "Time program"
+        }
       }
     }
   }

@@ -4,17 +4,32 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import quote
 
 import requests
 
 from .const import (
+    ITEM_AUTOMATIC_THERMOREGULATION,
+    ITEM_CH_FLOW_SETPOINT,
+    ITEM_CH_FLOW_TEMP,
+    ITEM_HEATING_CIRCUIT_PRESSURE,
+    ITEM_HEATING_FLOW_TEMP,
+    ITEM_HOLIDAY,
+    ITEM_IS_FLAME_ON,
+    ITEM_OUTSIDE_TEMP,
+    ITEM_PLANT_MODE,
+    ITEM_VIRT_COMFORT_TEMP,
+    ITEM_VIRT_FLOW_OFFSET,
+    ITEM_VIRT_FLOW_SETPOINT,
+    ITEM_VIRT_REDUCED_TEMP,
+    ITEM_ZONE_COMFORT_TEMP,
+    ITEM_ZONE_DESIRED_TEMP,
+    ITEM_ZONE_ECONOMY_TEMP,
+    ITEM_ZONE_HEAT_REQUEST,
+    ITEM_ZONE_MEASURED_TEMP,
+    ITEM_ZONE_MODE,
     MODE_AUTOMATIC,
-    MODE_COMFORT,
-    MODE_PROTECTION,
-    MODE_REDUCTION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -88,8 +103,31 @@ class RemoconData:
     # System (from v2 API)
     system_pressure: Optional[float] = None
     flow_temperature: Optional[float] = None
+    # Gas boiler (v2 BSB data items)
+    is_gas_boiler: bool = False
+    plant_mode: Optional[int] = None
+    boiler_zone_mode: Optional[int] = None
+    auto_thermoregulation: Optional[bool] = None
+    ch_flow_setpoint: Optional[float] = None
+    heat_request: bool = False
+    holiday: bool = False
+    gas_heating_month: Optional[float] = None
+    gas_dhw_month: Optional[float] = None
+    boiler_electricity_month: Optional[float] = None
+    items: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Meta
     has_room_sensor: bool = False
+
+    def item_value(self, item_id: str) -> Optional[float]:
+        """Return the current value of a raw data item, if present."""
+        item = self.items.get(item_id)
+        if item is None:
+            return None
+        return item.get("value")
+
+    def item_meta(self, item_id: str) -> dict[str, Any]:
+        """Return the raw data item (min/max/step/unit), or an empty dict."""
+        return self.items.get(item_id) or {}
 
 
 class RemoconClient:
@@ -101,6 +139,11 @@ class RemoconClient:
         self._gateway_id = gateway_id
         self._zone = zone
         self._session: Optional[requests.Session] = None
+        self._features: Optional[dict[str, Any]] = None
+        self._system_type: Optional[int] = None
+        self._is_gas_boiler: Optional[bool] = None
+        self._comfort_item_id: str = ITEM_VIRT_COMFORT_TEMP
+        self._reduced_item_id: str = ITEM_VIRT_REDUCED_TEMP
 
     def login(self) -> None:
         """Authenticate and store session cookie."""
@@ -161,13 +204,43 @@ class RemoconClient:
             _LOGGER.error("Invalid JSON response from API: %s", resp.text)
             raise RemoconDataError("Could not parse API response") from err
 
-    def _get_raw(self) -> dict:
+    def _get_features(self) -> dict[str, Any]:
+        """Fetch the plant's real feature set (cached).
+
+        The features payload is echoed back to the API and selects which data
+        items the plant reports; sending a generic payload makes the server
+        return the wrong item set for virtual-zone / boiler systems.
+        """
+        if self._features is not None:
+            return self._features
+        try:
+            data = self._request(
+                "GET", f"/R2/Plant/Features/{self._gateway_id}?eagerMode=false"
+            )
+            payload = data.get("data") or {}
+            features = dict(payload.get("features") or {})
+            plant = payload.get("plant") or {}
+            if plant.get("gatewayId"):
+                features["gatewayId"] = plant["gatewayId"]
+            self._system_type = plant.get("systemType")
+            self._features = features or dict(FEATURES_PAYLOAD)
+        except RemoconApiError as err:
+            _LOGGER.debug("Could not fetch plant features, using defaults: %s", err)
+            self._features = dict(FEATURES_PAYLOAD)
+        return self._features
+
+    def _get_raw(self, *, not_essentials: bool = False, real_features: bool = False) -> dict:
         path = f"/R2/PlantHome/GetData/{self._gateway_id}?umsys=si"
         payload = {
             "useCache": True,
             "zone": int(self._zone),
-            "filter": {"notEssentials": False, "plant": True, "zone": True, "dhw": True},
-            "features": FEATURES_PAYLOAD,
+            "filter": {
+                "notEssentials": not_essentials,
+                "plant": True,
+                "zone": True,
+                "dhw": True,
+            },
+            "features": self._get_features() if real_features else FEATURES_PAYLOAD,
         }
         data = self._request("POST", path, json=payload)
         if not data:
@@ -190,10 +263,33 @@ class RemoconClient:
 
     def get_data(self) -> RemoconData:
         """Fetch all data and return a RemoconData object."""
-        raw = self._get_raw()
+        if self._is_gas_boiler is None:
+            probe = self._get_raw()
+            if "plantData" in probe or "zoneData" in probe:
+                self._is_gas_boiler = False
+                return self._parse_heat_pump(probe)
+            self._is_gas_boiler = bool(probe.get("items"))
+
+        if self._is_gas_boiler:
+            # Boilers report a flat item list and need the real feature set to
+            # get the correct items (incl. flame / heat request).
+            raw = self._get_raw(not_essentials=True, real_features=True)
+        else:
+            raw = self._get_raw()
         if not isinstance(raw, dict):
             raise RemoconDataError(f"Unexpected data format from API: {type(raw)}")
-            
+
+        if self._is_gas_boiler:
+            data = self._parse_gas_boiler(raw)
+            try:
+                self._apply_metering(data)
+            except RemoconApiError as err:
+                _LOGGER.debug("Could not fetch metering data: %s", err)
+            return data
+        return self._parse_heat_pump(raw)
+
+    def _parse_heat_pump(self, raw: dict) -> RemoconData:
+        """Parse a heat-pump (plantData/zoneData) response."""
         plant = raw.get("plantData") or {}
         zone = raw.get("zoneData") or {}
 
@@ -242,6 +338,101 @@ class RemoconClient:
             flow_temperature=float(flow) if flow is not None else None,
             has_room_sensor=bool(zone.get("hasRoomSensor", 0)),
         )
+
+    def _parse_gas_boiler(self, raw: dict) -> RemoconData:
+        """Parse a gas-boiler (flat items[]) response."""
+        data = RemoconData(is_gas_boiler=True)
+        items = raw.get("items") or []
+        data.items = {item["id"]: item for item in items if item.get("id")}
+
+        def value(item_id: str) -> Optional[float]:
+            return data.item_value(item_id)
+
+        def meta(item_id: str) -> dict[str, Any]:
+            return data.item_meta(item_id)
+
+        # Zone comfort / reduced setpoints (virtual zones use Virt* items)
+        comfort = meta(ITEM_VIRT_COMFORT_TEMP) or meta(ITEM_ZONE_COMFORT_TEMP)
+        reduced = meta(ITEM_VIRT_REDUCED_TEMP) or meta(ITEM_ZONE_ECONOMY_TEMP)
+        if comfort:
+            self._comfort_item_id = comfort["id"]
+            data.comfort_temp = float(comfort.get("value", 0))
+            data.comfort_temp_min = float(comfort.get("min", 5))
+            data.comfort_temp_max = float(comfort.get("max", 35))
+            data.comfort_temp_step = float(comfort.get("step", 0.5)) or 0.5
+        if reduced:
+            self._reduced_item_id = reduced["id"]
+            data.reduced_temp = float(reduced.get("value", 0))
+
+        outside = value(ITEM_OUTSIDE_TEMP)
+        if outside is not None:
+            data.outside_temp = float(outside)
+        desired = value(ITEM_ZONE_DESIRED_TEMP)
+        if desired is not None:
+            data.desired_temp = float(desired)
+        measured = value(ITEM_ZONE_MEASURED_TEMP)
+        if measured is not None:
+            data.room_temp = float(measured)
+            data.has_room_sensor = float(measured) > 0
+
+        plant_mode = value(ITEM_PLANT_MODE)
+        if plant_mode is not None:
+            data.plant_mode = int(plant_mode)
+        zone_mode = value(ITEM_ZONE_MODE)
+        if zone_mode is not None:
+            data.boiler_zone_mode = int(zone_mode)
+        auto_thermo = value(ITEM_AUTOMATIC_THERMOREGULATION)
+        if auto_thermo is not None:
+            data.auto_thermoregulation = bool(auto_thermo)
+        flow_setpoint = value(ITEM_CH_FLOW_SETPOINT)
+        if flow_setpoint is not None:
+            data.ch_flow_setpoint = float(flow_setpoint)
+        heat_request = value(ITEM_ZONE_HEAT_REQUEST)
+        if heat_request is not None:
+            data.heat_request = bool(heat_request)
+            data.heating_active = bool(heat_request)
+        flame = value(ITEM_IS_FLAME_ON)
+        if flame is not None:
+            data.flame_sensor = bool(flame)
+        holiday = value(ITEM_HOLIDAY)
+        if holiday is not None:
+            data.holiday = bool(holiday)
+
+        for flow_id in (ITEM_CH_FLOW_TEMP, ITEM_HEATING_FLOW_TEMP):
+            flow = value(flow_id)
+            if flow is not None:
+                data.flow_temperature = float(flow)
+                break
+        pressure = value(ITEM_HEATING_CIRCUIT_PRESSURE)
+        if pressure is not None:
+            data.system_pressure = float(pressure)
+
+        return data
+
+    def _apply_metering(self, data: RemoconData) -> None:
+        """Populate gas/electricity consumption (boilers only)."""
+        metering = self._get_metering()
+        data.gas_heating_month = metering.get("heating")
+        data.gas_dhw_month = metering.get("dhw")
+        data.boiler_electricity_month = metering.get("electricity")
+
+    def _get_metering(self) -> dict[str, float]:
+        """Return current-month consumption in kWh from the metering API."""
+        result: dict[str, float] = {}
+        payload = self._request(
+            "POST", f"/R2/PlantMetering/GetData/{self._gateway_id}", json={}, timeout=30
+        )
+        data = payload.get("data") or {}
+        as_kwh = data.get("asKwh") or {}
+        for row in as_kwh.get("donutData") or []:
+            if row.get("tab") != "ConsumedGas" or row.get("period") != "CurrentMonth":
+                continue
+            series = str(row.get("series", "")).lower()
+            result[series] = float(row.get("value") or 0)
+        for row in as_kwh.get("boilerElectricity") or []:
+            if row.get("period") == "CurrentMonth":
+                result["electricity"] = float(row.get("value") or 0)
+        return result
 
     def set_zone_temperatures(
         self, comfort: float | None = None, reduced: float | None = None
@@ -309,6 +500,60 @@ class RemoconClient:
         """Set DHW mode: 0=off, 1=on."""
         path = f"/api/v2/remote/bsbPlantData/{self._gateway_id}/dhwMode"
         self._request("POST", path, json={"new": mode})
+
+    # ---- Gas boiler control (v2 BSB data items) ----
+
+    def set_data_items(self, changes: dict[str, float]) -> None:
+        """Write one or more data items.
+
+        ``changes`` maps a data item id to its new value. The API requires the
+        current item objects to be echoed back alongside the requested values.
+        """
+        raw = self._get_raw(not_essentials=True, real_features=True)
+        items = {item["id"]: item for item in raw.get("items") or []}
+        request: list[dict[str, Any]] = []
+        previous: list[dict[str, Any]] = []
+        for item_id, value in changes.items():
+            current = items.get(item_id)
+            if current is None:
+                raise RemoconDataError(f"Data item {item_id} is not available")
+            request.append({"itemId": item_id, "value": value})
+            previous.append(current)
+        if not request:
+            return
+        self._request(
+            "POST",
+            f"/R2/PlantAdvancedSettings/Save/{self._gateway_id}",
+            json={
+                "features": self._get_features(),
+                "requestItems": request,
+                "prevDataItems": previous,
+            },
+        )
+
+    def set_boiler_comfort_temperature(self, temperature: float) -> None:
+        """Set the zone comfort (day) temperature."""
+        self.set_data_items({self._comfort_item_id: temperature})
+
+    def set_boiler_reduced_temperature(self, temperature: float) -> None:
+        """Set the zone reduced (night) temperature."""
+        self.set_data_items({self._reduced_item_id: temperature})
+
+    def set_plant_mode(self, mode: int) -> None:
+        """Set the plant operation mode (summer/winter/heating only/off)."""
+        self.set_data_items({ITEM_PLANT_MODE: mode})
+
+    def set_boiler_zone_mode(self, mode: int) -> None:
+        """Set the boiler zone mode (manual / time program)."""
+        self.set_data_items({ITEM_ZONE_MODE: mode})
+
+    def set_flow_setpoint(self, value: float) -> None:
+        """Set the central-heating flow setpoint temperature."""
+        self.set_data_items({ITEM_VIRT_FLOW_SETPOINT: value})
+
+    def set_flow_offset(self, value: float) -> None:
+        """Set the central-heating flow temperature offset."""
+        self.set_data_items({ITEM_VIRT_FLOW_OFFSET: value})
 
     def reauth(self) -> None:
         """Force re-authentication."""

@@ -1,25 +1,35 @@
 # ha-remocon
 
-**Unofficial Home Assistant integration for Elco heat pumps via the Remocon-Net cloud service.**
+**Unofficial Home Assistant integration for Elco heating systems via the Remocon-Net cloud service.**
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/)
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=macschlingel&repository=ha-remocon&category=integration)
 
-Control and monitor your Elco heat pump (e.g. Aerotop SPK) through the Remocon-Net cloud API — directly in Home Assistant, no MQTT or AppDaemon needed.
+Control and monitor your Elco heating system (heat pump e.g. Aerotop SPK, or gas boiler) through the Remocon-Net cloud API — directly in Home Assistant, no MQTT or AppDaemon needed.
 
 > **Disclaimer:** This is an unofficial community project. It is not endorsed by or affiliated with Elco or the Ariston Thermo Group.
 
 ## Features
 
+**Heat pumps**
 - **Climate entity** — Set target temperature, switch operation mode (Auto / Heat / Off), presets (Comfort / Reduced)
 - **Sensors** — Outside temperature, flow temperature, target temperature, system pressure
 - **Binary sensors** — Heating active, cooling active, heat pump running
+
+**Gas boilers** (virtual-zone boilers, e.g. residential gas boilers)
+- **Climate entity** — Set the room setpoint; switch operation mode (Off / Heat / Auto)
+- **Select entities** — Operation mode (Summer / Winter / Heating only / Off) and zone mode (Manual / Time program)
+- **Number entities** — Central-heating flow setpoint, flow offset, reduced temperature
+- **Sensors** — Outside temperature, desired/reduced temperature, flow setpoint, gas and electricity consumption (current month)
+- **Binary sensors** — Burner flame, heat request, heating active
+
+**Common**
 - **Config flow** — Easy setup directly in the Home Assistant UI
 - **CLI tool** — Standalone `remocon.py` for testing and debugging from the terminal
 
 ## Requirements
 
-- Elco heat pump with a Remocon-Net gateway (connected to the internet)
+- Elco heat pump or gas boiler with a Remocon-Net gateway (connected to the internet)
 - Remocon-Net account ([remocon-net.remotethermo.com](https://www.remocon-net.remotethermo.com))
 - Home Assistant >= 2024.1.0
 - [HACS](https://hacs.xyz/) installed
@@ -67,7 +77,10 @@ Restart Home Assistant.
 
 ## Entities
 
-After setup, the following entities are created:
+After setup, the following entities are created (the exact set depends on the
+system — heat pumps expose the heat-pump entities, gas boilers the boiler ones):
+
+### Heat pumps
 
 | Entity | Type | Description |
 |--------|------|-------------|
@@ -81,17 +94,39 @@ After setup, the following entities are created:
 | `binary_sensor.cooling_active` | Binary | Cooling is active |
 | `binary_sensor.heat_pump_on` | Binary | Heat pump is running |
 
+### Gas boilers
+
+| Entity | Type | Description |
+|--------|------|-------------|
+| `climate.remocon_net_boiler` | Climate | Room setpoint and coarse mode (Off / Heat / Auto) |
+| `select.operation_mode` | Select | Operation mode (Summer / Winter / Heating only / Off) |
+| `select.zone_mode` | Select | Zone mode (Manual / Time program) |
+| `number.flow_setpoint` | Number | Central-heating flow setpoint temperature |
+| `number.flow_offset` | Number | Central-heating flow temperature offset |
+| `number.reduced_temperature` | Number | Reduced (night) setpoint temperature |
+| `sensor.outside_temperature` | Sensor | Outside temperature |
+| `sensor.desired_temperature` | Sensor | Desired room temperature |
+| `sensor.reduced_temperature` | Sensor | Reduced setpoint temperature |
+| `sensor.ch_flow_setpoint` | Sensor | Flow setpoint temperature |
+| `sensor.gas_heating_month` | Sensor | Gas used for heating this month (kWh) |
+| `sensor.gas_dhw_month` | Sensor | Gas used for hot water this month (kWh) |
+| `sensor.boiler_electricity_month` | Sensor | Electricity used this month (kWh) |
+| `binary_sensor.flame_on` | Binary | Burner flame is lit |
+| `binary_sensor.heat_request` | Binary | Zone is requesting heat |
+
 ### Climate entity
 
 The climate entity supports:
 
-- **HVAC modes:** `Heat` (Comfort), `Auto` (time program), `Off` (frost protection)
-- **Presets:** `Comfort`, `Reduced`
-- **Temperature:** Adjustable within the range configured on the heat pump
+- **Heat pumps:** modes `Heat` (Comfort), `Auto` (time program), `Off` (frost protection); presets `Comfort`, `Reduced`
+- **Gas boilers:** modes `Heat` (heating only), `Auto` (winter), `Off`; the full four-way operation mode is on the `select.operation_mode` entity
+- **Temperature:** Adjustable within the range reported by the system
 
 ## CLI Tool
 
-A standalone CLI tool is included for testing and debugging:
+A standalone CLI tool is included for testing and debugging. It auto-detects
+whether your system is a heat pump or a gas boiler and picks the matching
+protocol.
 
 ```bash
 pip install -r requirements.txt
@@ -100,36 +135,67 @@ pip install -r requirements.txt
 cp config.example.json config.json
 # Edit config.json with your email, password and gateway ID
 
-# Check status
+# Check status (auto-detects heat pump / gas boiler)
 python3 remocon.py --config-file config.json status
-
-# Set temperature
-python3 remocon.py --config-file config.json set-temp --comfort 22.0
-
-# Change mode
-python3 remocon.py --config-file config.json set-mode comfort
-
-# Raw API response (debug)
-python3 remocon.py --config-file config.json raw-get
 
 # JSON output (for scripting)
 python3 remocon.py --config-file config.json status --json
+
+# Set room / zone temperatures (both systems)
+python3 remocon.py --config-file config.json set-temp --comfort 22.0 --reduced 18.0
+
+# Raw API response (debug)
+python3 remocon.py --config-file config.json raw-get
 ```
+
+**Heat pumps** — `set-mode` takes `protection`, `automatic`, `reduction`, `comfort`:
+
+```bash
+python3 remocon.py --config-file config.json set-mode comfort
+python3 remocon.py --config-file config.json set-dhw-temp --comfort 48 --reduced 40
+python3 remocon.py --config-file config.json set-dhw-mode on
+```
+
+**Gas boilers** — `set-mode` takes `summer`, `winter`, `heating-only`, `off`; the
+boiler-specific commands are:
+
+```bash
+# Operation mode (summer / winter / heating-only / off)
+python3 remocon.py --config-file config.json set-operation-mode winter
+python3 remocon.py --config-file config.json set-mode winter        # same, auto-detected
+
+# Zone mode (manual / time-program)
+python3 remocon.py --config-file config.json set-zone-mode manual
+
+# Central-heating flow setpoint and offset
+python3 remocon.py --config-file config.json set-flow-setpoint 60
+python3 remocon.py --config-file config.json set-flow-offset 5
+```
+
+### MQTT
+
+With `--mqtt-enabled`, `status` also publishes the data (including
+`…/boiler/gas_heating_month_kwh`, `…/boiler/flame_on`, `…/boiler/plant_mode`
+for gas boilers) to the configured broker.
 
 ## Known limitations
 
 - **Cloud-dependent:** Control goes through the Remocon-Net cloud. No control possible during internet outages.
 - **Polling:** Data is fetched every 2 minutes (no real-time streaming).
-- **No room sensor:** If no room thermostat is connected, `current_temperature` shows the target value.
-- **DHW read-only:** Domestic hot water entities are displayed, but DHW control is not yet available through the HA entity (works via CLI).
+- **No room sensor:** If no room thermostat is connected, `current_temperature` shows the target value (heat pumps) or is unknown (boilers, which report no measured room temperature).
+- **DHW control:** Domestic hot water entities are read-only and only created for systems that expose a DHW circuit (many gas boilers are heating-only).
+- **Gas boilers:** Only virtual-zone boilers exposing the v2 data-item model are supported. Heating/cooling curves, holiday programmes and weekly time programmes are not yet exposed.
 
 ## Technical details
 
 The integration uses the same API as the Elco Remocon-Net web app:
 
 - **Login:** Cookie-based authentication via `/R2/Account/Login`
-- **Data:** R2 Web API (`/R2/PlantHomeBsb/GetData/`) + v2 REST API (`/api/v2/remote/dataItems/`)
-- **Control:** v2 REST API (`/api/v2/remote/bsbZones/`, `/api/v2/remote/bsbPlantData/`)
+- **Data:** R2 Web API (`/R2/PlantHome/GetData/`) + v2 REST API (`/api/v2/remote/dataItems/`)
+- **Features:** `/R2/Plant/Features/{gateway}` — the real feature set is sent back with every read/write request; it selects which data items the plant reports
+- **Control (heat pumps):** v2 REST API (`/api/v2/remote/bsbZones/`, `/api/v2/remote/bsbPlantData/`)
+- **Control (gas boilers):** v2 BSB data items via `/R2/PlantAdvancedSettings/Save/{gateway}`
+- **Consumption:** `/R2/PlantMetering/GetData/{gateway}` (gas / electricity, current month)
 - **Platform:** remotethermo.com (Ariston Thermo Group)
 
 ## Contributing

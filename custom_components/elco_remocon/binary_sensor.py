@@ -37,23 +37,41 @@ BINARY_SENSORS: tuple[ElcoBinarySensorDescription, ...] = (
         translation_key="heating_active",
         device_class=BinarySensorDeviceClass.HEAT,
         value_fn=lambda d: d.heating_active,
+        exists_fn=lambda d: not d.is_gas_boiler,
     ),
     ElcoBinarySensorDescription(
         key="cooling_active",
         translation_key="cooling_active",
         device_class=BinarySensorDeviceClass.COLD,
         value_fn=lambda d: d.cooling_active,
+        exists_fn=lambda d: not d.is_gas_boiler,
     ),
     ElcoBinarySensorDescription(
         key="heat_pump_on",
         translation_key="heat_pump_on",
         device_class=BinarySensorDeviceClass.RUNNING,
         value_fn=lambda d: d.heat_pump_on,
+        exists_fn=lambda d: not d.is_gas_boiler,
     ),
     ElcoBinarySensorDescription(
         key="dhw_enabled",
         translation_key="dhw_enabled",
         value_fn=lambda d: d.dhw_enabled,
+        exists_fn=lambda d: d.dhw_enabled or not d.is_gas_boiler,
+    ),
+    ElcoBinarySensorDescription(
+        key="flame_on",
+        translation_key="flame_on",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        value_fn=lambda d: d.flame_sensor,
+        exists_fn=lambda d: d.is_gas_boiler,
+    ),
+    ElcoBinarySensorDescription(
+        key="heat_request",
+        translation_key="heat_request",
+        device_class=BinarySensorDeviceClass.HEAT,
+        value_fn=lambda d: d.heat_request,
+        exists_fn=lambda d: d.is_gas_boiler,
     ),
 )
 
@@ -90,11 +108,12 @@ class ElcoBinarySensor(CoordinatorEntity[ElcoRemoconCoordinator], BinarySensorEn
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{gw_id}_{description.key}"
+        is_boiler = bool(coordinator.data and coordinator.data.is_gas_boiler)
         self._attr_device_info = {
             "identifiers": {(DOMAIN, gw_id)},
-            "name": "Remocon-Net Heat Pump",
+            "name": "Remocon-Net Boiler" if is_boiler else "Remocon-Net Heat Pump",
             "manufacturer": "Elco",
-            "model": "Aerotop SPK",
+            "model": "Gas boiler" if is_boiler else "Aerotop SPK",
         }
 
     @property

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -13,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfPressure, UnitOfTemperature
+from homeassistant.const import EntityCategory, UnitOfEnergy, UnitOfPressure, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
@@ -93,6 +92,47 @@ SENSORS: tuple[ElcoSensorDescription, ...] = (
         value_fn=lambda d: d.dhw_temp if d.dhw_temp > 0 else None,
         exists_fn=lambda d: d.dhw_enabled,
     ),
+    ElcoSensorDescription(
+        key="ch_flow_setpoint",
+        translation_key="ch_flow_setpoint",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.ch_flow_setpoint,
+        exists_fn=lambda d: d.is_gas_boiler and d.ch_flow_setpoint is not None,
+    ),
+    ElcoSensorDescription(
+        key="gas_heating_month",
+        translation_key="gas_heating_month",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        suggested_display_precision=1,
+        value_fn=lambda d: d.gas_heating_month,
+        exists_fn=lambda d: d.is_gas_boiler and d.gas_heating_month is not None,
+    ),
+    ElcoSensorDescription(
+        key="gas_dhw_month",
+        translation_key="gas_dhw_month",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        suggested_display_precision=1,
+        value_fn=lambda d: d.gas_dhw_month,
+        exists_fn=lambda d: d.is_gas_boiler and d.gas_dhw_month is not None,
+    ),
+    ElcoSensorDescription(
+        key="boiler_electricity_month",
+        translation_key="boiler_electricity_month",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        suggested_display_precision=2,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: d.boiler_electricity_month,
+        exists_fn=lambda d: d.is_gas_boiler and d.boiler_electricity_month is not None,
+    ),
 )
 
 
@@ -128,11 +168,12 @@ class ElcoSensor(CoordinatorEntity[ElcoRemoconCoordinator], SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{gw_id}_{description.key}"
+        is_boiler = bool(coordinator.data and coordinator.data.is_gas_boiler)
         self._attr_device_info = {
             "identifiers": {(DOMAIN, gw_id)},
-            "name": "Remocon-Net Heat Pump",
+            "name": "Remocon-Net Boiler" if is_boiler else "Remocon-Net Heat Pump",
             "manufacturer": "Elco",
-            "model": "Aerotop SPK",
+            "model": "Gas boiler" if is_boiler else "Aerotop SPK",
         }
 
     @property

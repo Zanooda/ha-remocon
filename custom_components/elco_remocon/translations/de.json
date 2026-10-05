@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Remocon-Net (inoffiziell)",
-        "description": "Inoffizielle Integration — verbinde deine Elco Wärmepumpe über die Remocon-Net Cloud.",
+        "description": "Inoffizielle Integration — verbinde deine Elco Heizungsanlage über die Remocon-Net Cloud.",
         "data": {
           "email": "E-Mail",
           "password": "Passwort",
@@ -19,6 +19,14 @@
     }
   },
   "entity": {
+    "climate": {
+      "elco_heat_pump": {
+        "name": "Wärmepumpe"
+      },
+      "elco_boiler": {
+        "name": "Heizkessel"
+      }
+    },
     "sensor": {
       "outside_temperature": {
         "name": "Außentemperatur"
@@ -37,6 +45,67 @@
       },
       "dhw_temperature": {
         "name": "Warmwassertemperatur"
+      },
+      "ch_flow_setpoint": {
+        "name": "Vorlauf-Solltemperatur"
+      },
+      "gas_heating_month": {
+        "name": "Gasverbrauch Heizung (diesen Monat)"
+      },
+      "gas_dhw_month": {
+        "name": "Gasverbrauch Warmwasser (diesen Monat)"
+      },
+      "boiler_electricity_month": {
+        "name": "Stromverbrauch (diesen Monat)"
+      }
+    },
+    "binary_sensor": {
+      "heating_active": {
+        "name": "Heizung aktiv"
+      },
+      "cooling_active": {
+        "name": "Kühlung aktiv"
+      },
+      "heat_pump_on": {
+        "name": "Wärmepumpe läuft"
+      },
+      "dhw_enabled": {
+        "name": "Warmwasser"
+      },
+      "flame_on": {
+        "name": "Brennerflamme"
+      },
+      "heat_request": {
+        "name": "Wärmeanforderung"
+      }
+    },
+    "number": {
+      "flow_setpoint": {
+        "name": "Vorlauf-Solltemperatur"
+      },
+      "flow_offset": {
+        "name": "Vorlauf-Temperaturoffset"
+      },
+      "reduced_temperature": {
+        "name": "Absenktemperatur"
+      }
+    },
+    "select": {
+      "operation_mode": {
+        "name": "Betriebsart",
+        "state": {
+          "summer": "Sommer",
+          "winter": "Winter",
+          "heating_only": "Nur Heizen",
+          "off": "Aus"
+        }
+      },
+      "zone_mode": {
+        "name": "Zonenmodus",
+        "state": {
+          "manual": "Manuell",
+          "time_program": "Zeitprogramm"
+        }
       }
     }
   }
