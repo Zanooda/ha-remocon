@@ -3,7 +3,7 @@
 **Unofficial Home Assistant integration for Elco heating systems via the Remocon-Net cloud service.**
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/)
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=macschlingel&repository=ha-remocon&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Zanooda&repository=ha-remocon&category=integration)
 
 Control and monitor your Elco heating system (heat pump e.g. Aerotop SPK, or gas boiler) through the Remocon-Net cloud API — directly in Home Assistant, no MQTT or AppDaemon needed.
 
@@ -43,7 +43,7 @@ Hot water entities are only created when the boiler exposes a DHW circuit.
 1. Open HACS in Home Assistant
 2. **≡ Menu** → **Custom Repositories**
 3. Add:
-   - **URL:** `https://github.com/macschlingel/ha-remocon`
+   - **URL:** `https://github.com/Zanooda/ha-remocon`
    - **Category:** Integration
 4. Search for **"Remocon-Net"** in HACS and install
 5. Restart Home Assistant
@@ -52,7 +52,7 @@ Hot water entities are only created when the boiler exposes a DHW circuit.
 
 ```bash
 cd /path/to/homeassistant/config/custom_components/
-git clone https://github.com/macschlingel/ha-remocon.git elco_remocon_temp
+git clone https://github.com/Zanooda/ha-remocon.git elco_remocon_temp
 cp -r elco_remocon_temp/custom_components/elco_remocon ./
 rm -rf elco_remocon_temp
 ```

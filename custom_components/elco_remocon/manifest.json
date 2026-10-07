@@ -3,9 +3,9 @@
   "name": "Remocon-Net (unofficial)",
   "codeowners": ["@bastian"],
   "config_flow": true,
-  "documentation": "https://github.com/macschlingel/ha-remocon",
+  "documentation": "https://github.com/Zanooda/ha-remocon",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/macschlingel/ha-remocon/issues",
+  "issue_tracker": "https://github.com/Zanooda/ha-remocon/issues",
   "requirements": [],
   "version": "0.2.0"
 }
